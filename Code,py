@@ -1,0 +1,114 @@
+import tensorflow as tf
+from tensorflow.keras.applications import InceptionV3, ResNet50
+from tensorflow.keras.applications.inception_v3 import preprocess_input as inception_preprocess
+from tensorflow.keras.applications.resnet50 import preprocess_input as resnet_preprocess
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Concatenate, Input
+from tensorflow.keras.models import Model
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.optimizers import Adam
+from sklearn.metrics import confusion_matrix, classification_report
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Load dataset with preprocessing
+train_datagen = ImageDataGenerator(preprocessing_function=inception_preprocess, rotation_range=30, width_shift_range=0.2,
+                                   height_shift_range=0.2, shear_range=0.2, zoom_range=0.2,
+                                   horizontal_flip=True, validation_split=0.2)
+
+test_datagen = ImageDataGenerator(preprocessing_function=inception_preprocess)
+
+train_generator = train_datagen.flow_from_directory('/content/chest_xray/train', target_size=(224, 224),
+                                                    batch_size=32, class_mode='categorical')
+validation_generator = train_datagen.flow_from_directory('/content/chest_xray/val', target_size=(224, 224),
+                                                         batch_size=32, class_mode='categorical')
+test_generator = test_datagen.flow_from_directory('/content/chest_xray/test', target_size=(224, 224),
+                                                  batch_size=32, class_mode='categorical', shuffle=False)
+
+# Define input shape
+input_shape = (224, 224, 3)
+inputs = Input(shape=input_shape)
+
+# Load pre-trained models without top layers
+inception = InceptionV3(weights='imagenet', include_top=False, input_tensor=inputs)
+resnet = ResNet50(weights='imagenet', include_top=False, input_tensor=inputs)
+
+# Extract feature maps
+inception_output = GlobalAveragePooling2D()(inception.output)
+resnet_output = GlobalAveragePooling2D()(resnet.output)
+
+# Concatenate features from both models
+merged = Concatenate()([inception_output, resnet_output])
+
+# Fully connected layers
+x = Dense(512, activation='relu')(merged)
+x = Dense(256, activation='relu')(x)
+
+# Get num_classes from train_generator before defining the model
+num_classes = train_generator.num_classes
+x = Dense(num_classes, activation='softmax')(x)  # Now using num_classes variable
+
+# Create model
+model = Model(inputs=inputs, outputs=x)
+
+# Compile model
+model.compile(optimizer=Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train model
+history = model.fit(train_generator, validation_data=validation_generator, epochs=11)
+
+# Evaluate model
+train_loss, train_acc = model.evaluate(train_generator)
+val_loss, val_acc = model.evaluate(validation_generator)
+test_loss, test_acc = model.evaluate(test_generator)
+print(f'Train Accuracy: {train_acc:.4f}, Validation Accuracy: {val_acc:.2f}, Test Accuracy: {test_acc:.4f}')
+
+# Predict on the test set
+y_pred = model.predict(test_generator)
+y_pred_classes = np.argmax(y_pred, axis=1)
+
+# Get true labels
+y_true = test_generator.classes
+
+# Compute the confusion matrix
+cm = confusion_matrix(y_true, y_pred_classes)
+
+# Plot the confusion matrix
+plt.figure(figsize=(6, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=test_generator.class_indices.keys(),
+            yticklabels=test_generator.class_indices.keys())
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.title('Confusion Matrix')
+plt.show()
+
+# Print classification report
+print(classification_report(y_true, y_pred_classes, target_names=test_generator.class_indices.keys()))
+
+# ROC Curve and AUC
+fpr, tpr, thresholds = roc_curve(y_true, y_pred_prob[:, 1])  # Use the probability of the positive class
+roc_auc = auc(fpr, tpr)
+
+# Plot ROC Curve
+plt.figure(figsize=(6, 6))
+plt.plot(fpr, tpr, color='blue', lw=2, label=f'ROC Curve (AUC = {roc_auc:.2f})')
+plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+plt.xlabel('False Positive Rate (FPR)')
+plt.ylabel('True Positive Rate (TPR)')
+plt.title('Receiver Operating Characteristic (ROC) Curve')
+plt.legend(loc='lower right')
+plt.show()
+
+# Precision-Recall Curve
+precision, recall, _ = precision_recall_curve(y_true, y_pred_prob[:, 1])
+average_precision = average_precision_score(y_true, y_pred_prob[:, 1])
+
+# Plot Precision-Recall Curve
+plt.figure(figsize=(6, 6))
+plt.plot(recall, precision, color='green', lw=2, label=f'Precision-Recall Curve (AP = {average_precision:.2f})')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.legend(loc='lower left')
+plt.show()
